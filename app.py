@@ -1,7 +1,8 @@
 import streamlit as st
 import time
 import json
-import numpy as np
+import torch
+from diffusers import StableDiffusionPipeline
 from PIL import Image
 
 # ===============================
@@ -13,6 +14,20 @@ st.set_page_config(
 )
 
 # ===============================
+# Load Stable Diffusion (ONCE)
+# ===============================
+@st.cache_resource
+def load_sd():
+    pipe = StableDiffusionPipeline.from_pretrained(
+        "runwayml/stable-diffusion-v1-5",
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+    )
+    pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+    return pipe
+
+pipe = load_sd()
+
+# ===============================
 # Session State
 # ===============================
 if "generated" not in st.session_state:
@@ -22,7 +37,7 @@ if "house_json" not in st.session_state:
     st.session_state.house_json = None
 
 # ===============================
-# Caesar Cipher Decrypt
+# Caesar Decrypt
 # ===============================
 def caesar_decrypt(text, key=3):
     result = ""
@@ -35,40 +50,26 @@ def caesar_decrypt(text, key=3):
     return result
 
 # ===============================
-# MOCK OSS MODEL
-# provider-6/gpt-oss-120b
+# MOCK OSS MODEL (JSON OUTPUT)
 # ===============================
 def call_oss_model(prompt, api_key):
-    time.sleep(1)
     return {
         "house": {
-            "total_area_sqft": 2200,
             "floors": [
                 {
                     "floor": 1,
                     "rooms": [
                         {
                             "name": "Living Room",
-                            "dimensions_ft": "18x15",
-                            "style": "Modern Minimal",
-                            "furniture": ["Sofa", "Coffee Table", "TV Unit"]
+                            "dimensions": "18x15 ft",
+                            "style": "modern minimal",
+                            "furniture": ["sofa", "coffee table", "tv unit"]
                         },
                         {
                             "name": "Kitchen",
-                            "dimensions_ft": "12x10",
-                            "style": "Contemporary",
-                            "furniture": ["Modular Cabinets", "Island", "Chimney"]
-                        }
-                    ]
-                },
-                {
-                    "floor": 2,
-                    "rooms": [
-                        {
-                            "name": "Master Bedroom",
-                            "dimensions_ft": "16x14",
-                            "style": "Luxury Modern",
-                            "furniture": ["King Bed", "Wardrobe", "Side Tables"]
+                            "dimensions": "12x10 ft",
+                            "style": "contemporary",
+                            "furniture": ["modular cabinets", "kitchen island"]
                         }
                     ]
                 }
@@ -77,126 +78,79 @@ def call_oss_model(prompt, api_key):
     }
 
 # ===============================
-# IMAGE MODEL (JSON → IMAGE)
-# provider-4/imagen-4 (mocked)
+# JSON → IMAGE PROMPT
 # ===============================
-def call_image_model(json_payload, api_key):
-    """
-    Simulates real image generation by returning an actual image object.
-    Streamlit WILL render this.
-    """
-    time.sleep(1)
-
-    img_array = np.random.randint(
-        0, 255, (600, 900, 3), dtype=np.uint8
+def generate_room_image(room_json):
+    prompt = (
+        f"photorealistic {room_json['style']} {room_json['name']} interior, "
+        f"fully furnished with {', '.join(room_json['furniture'])}, "
+        f"luxury lighting, ultra realistic, interior design, high quality"
     )
 
-    return Image.fromarray(img_array)
+    image = pipe(
+        prompt,
+        num_inference_steps=30,
+        guidance_scale=7.5
+    ).images[0]
+
+    return image
 
 # ===============================
 # UI
 # ===============================
-st.title("🏠 AI House Design Generator")
-st.caption("JSON → Image · Auto Sequential Generation")
+st.title("🏠 AI Furnished Room Generator (REAL IMAGES)")
+st.caption("Stable Diffusion powered · JSON → Interior Images")
 
 encrypted_key = st.text_input(
     "Encrypted API Key",
-    value="ggf-d4i-5g489223hee84f0387e2f7h3fe01d751",
     type="password"
 )
 
 user_prompt = st.text_area(
     "Describe your house",
-    placeholder="2 floor modern house with open kitchen, balcony, luxury interiors"
+    placeholder="Modern 2 floor house with open kitchen"
 )
 
 # ===============================
-# GENERATE PIPELINE
+# PIPELINE
 # ===============================
 if st.button("Generate 🚀") and not st.session_state.generated:
 
     api_key = caesar_decrypt(encrypted_key)
 
-    with st.spinner("Reasoning with OSS model..."):
+    with st.spinner("Reasoning (OSS model)..."):
         house_json = call_oss_model(user_prompt, api_key)
 
     st.session_state.house_json = house_json
     st.session_state.generated = True
 
 # ===============================
-# RENDER + AUTO IMAGE GENERATION
+# RENDER + IMAGE GEN
 # ===============================
 if st.session_state.generated:
 
-    st.subheader("📐 Structured 2D Design (JSON)")
+    st.subheader("📐 Design JSON")
     st.json(st.session_state.house_json)
 
-    st.subheader("🖼️ Auto-Generated Images")
+    st.subheader("🖼️ Furnished Room Images")
 
     progress = st.progress(0.0)
-    image_slot = st.empty()
+    rooms = st.session_state.house_json["house"]["floors"][0]["rooms"]
 
-    floors = st.session_state.house_json["house"]["floors"]
-    total_steps = sum(len(f["rooms"]) for f in floors) + 2
-    step = 0
+    for i, room in enumerate(rooms):
+        with st.spinner(f"Generating {room['name']}..."):
+            img = generate_room_image(room)
 
-    # ---- ROOM IMAGES ----
-    for floor in floors:
-        for room in floor["rooms"]:
+        st.image(
+            img,
+            caption=f"{room['name']} ({room['style']})",
+            use_container_width=True
+        )
 
-            room_payload = {
-                "type": "room_interior",
-                "floor": floor["floor"],
-                "room": room,
-                "render": "photorealistic, furnished"
-            }
+        st.code(json.dumps(room, indent=2), language="json")
+        progress.progress((i + 1) / len(rooms))
 
-            img = call_image_model(room_payload, encrypted_key)
-
-            image_slot.image(
-                img,
-                caption=f"{room['name']} | Floor {floor['floor']}",
-                use_container_width=True
-            )
-
-            st.code(json.dumps(room_payload, indent=2), language="json")
-
-            step += 1
-            progress.progress(step / total_steps)
-
-    # ---- 2D FLOOR PLAN ----
-    floorplan_payload = {
-        "type": "2d_floor_plan",
-        "style": "white paper",
-        "notations": True,
-        "house": st.session_state.house_json
-    }
-
-    image_slot.image(
-        call_image_model(floorplan_payload, encrypted_key),
-        caption="2D Floor Plan",
-        use_container_width=True
-    )
-
-    step += 1
-    progress.progress(step / total_steps)
-
-    # ---- EXTERIOR ----
-    exterior_payload = {
-        "type": "house_exterior",
-        "style": "modern realistic",
-        "house": st.session_state.house_json
-    }
-
-    image_slot.image(
-        call_image_model(exterior_payload, encrypted_key),
-        caption="Exterior View",
-        use_container_width=True
-    )
-
-    progress.progress(1.0)
-
-    st.success("✅ Images generated successfully from JSON")
+    st.success("✅ Real furnished images generated")
 
     if st.button("Reset 🔄"):
         st.session_state.generated = False
