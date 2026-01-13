@@ -2,3 +2,8 @@ streamlit
 requests
 pydantic
 typing-extensions
+torch
+diffusers
+transformers
+accelerate
+pillow
