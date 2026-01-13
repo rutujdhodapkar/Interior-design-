@@ -1,11 +1,32 @@
 import streamlit as st
-import json
 import time
-from typing import Dict, List
+from typing import Dict
 
-# -------------------------------
-# Caesar Cipher Decryption (key=3)
-# -------------------------------
+# ===============================
+# Streamlit Config
+# ===============================
+st.set_page_config(
+    page_title="AI House Design Generator",
+    layout="wide"
+)
+
+st.set_option("logger.level", "error")
+
+# ===============================
+# Session State Init
+# ===============================
+if "generated" not in st.session_state:
+    st.session_state.generated = False
+
+if "images" not in st.session_state:
+    st.session_state.images = []
+
+if "house_json" not in st.session_state:
+    st.session_state.house_json = None
+
+# ===============================
+# Caesar Cipher Decryption
+# ===============================
 def caesar_decrypt(text: str, key: int = 3) -> str:
     result = ""
     for char in text:
@@ -16,17 +37,12 @@ def caesar_decrypt(text: str, key: int = 3) -> str:
             result += char
     return result
 
-
-# -------------------------------
-# Mock OSS LLM Call (replace later)
-# -------------------------------
+# ===============================
+# MOCK OSS MODEL (replace later)
+# provider-6/gpt-oss-120b
+# ===============================
 def call_oss_model(prompt: str, api_key: str) -> Dict:
-    """
-    Model: provider-6/gpt-oss-120b
-    This is a mocked response. Replace with real API call later.
-    """
-
-    # Simulated structured output
+    time.sleep(1)
     return {
         "house": {
             "total_area_sqft": 2200,
@@ -37,14 +53,14 @@ def call_oss_model(prompt: str, api_key: str) -> Dict:
                         {
                             "name": "Living Room",
                             "dimensions_ft": "18x15",
-                            "furniture": ["Sofa", "Coffee Table", "TV Unit"],
-                            "design_style": "Modern minimal"
+                            "design_style": "Modern Minimal",
+                            "furniture": ["Sofa", "Coffee Table", "TV Unit"]
                         },
                         {
                             "name": "Kitchen",
                             "dimensions_ft": "12x10",
-                            "furniture": ["Modular Cabinets", "Island", "Chimney"],
-                            "design_style": "Contemporary"
+                            "design_style": "Contemporary",
+                            "furniture": ["Modular Cabinets", "Island", "Chimney"]
                         }
                     ]
                 },
@@ -54,8 +70,8 @@ def call_oss_model(prompt: str, api_key: str) -> Dict:
                         {
                             "name": "Master Bedroom",
                             "dimensions_ft": "16x14",
-                            "furniture": ["King Bed", "Wardrobe", "Side Tables"],
-                            "design_style": "Luxury modern"
+                            "design_style": "Luxury Modern",
+                            "furniture": ["King Bed", "Wardrobe", "Side Tables"]
                         }
                     ]
                 }
@@ -63,27 +79,22 @@ def call_oss_model(prompt: str, api_key: str) -> Dict:
         }
     }
 
+# ===============================
+# MOCK IMAGE MODEL
+# provider-4/imagen-4
+# ===============================
+def call_image_model(prompt: str, api_key: str) -> str:
+    time.sleep(1)
+    return (
+        "https://via.placeholder.com/900x600.png?text="
+        + prompt.replace(" ", "+")[:100]
+    )
 
-# -------------------------------
-# Mock Image Generation Call
-# -------------------------------
-def call_image_model(description: str, api_key: str) -> str:
-    """
-    Model: provider-4/imagen-4
-    Returns a placeholder image URL.
-    Replace with real image generation API.
-    """
-    time.sleep(1)  # simulate latency
-    return "https://via.placeholder.com/800x600.png?text=" + description.replace(" ", "+")
-
-
-# -------------------------------
-# Streamlit UI
-# -------------------------------
-st.set_page_config(page_title="AI House Design Pipeline", layout="wide")
-
+# ===============================
+# UI
+# ===============================
 st.title("🏠 AI House Design Generator")
-st.caption("OSS reasoning → structured design → sequential image generation")
+st.caption("Auto pipeline · Sequential images · Stable Streamlit execution")
 
 encrypted_api_key = st.text_input(
     "Encrypted API Key",
@@ -92,59 +103,98 @@ encrypted_api_key = st.text_input(
 )
 
 user_prompt = st.text_area(
-    "Describe your house requirements",
-    placeholder="e.g. 2 floor modern house with 3 bedrooms, open kitchen, balcony..."
+    "Describe your house",
+    placeholder="2 floor modern house with open kitchen, 3 bedrooms, balcony..."
 )
 
-if st.button("Generate House Design 🚀"):
+# ===============================
+# GENERATION PIPELINE
+# ===============================
+if st.button("Generate House Design 🚀") and not st.session_state.generated:
 
     if not user_prompt.strip():
-        st.error("Prompt required. Don’t be lazy.")
+        st.error("Prompt required.")
         st.stop()
 
-    # Decrypt API key
     decrypted_key = caesar_decrypt(encrypted_api_key)
 
-    st.success("API key decrypted successfully.")
-
-    # Call OSS model
     with st.spinner("Reasoning with OSS model..."):
         house_json = call_oss_model(user_prompt, decrypted_key)
 
-    st.subheader("📐 Structured 2D Design (JSON)")
-    st.json(house_json)
+    st.session_state.house_json = house_json
+    st.session_state.images = []
 
-    # Image generation pipeline
-    st.subheader("🖼️ Generated Visuals")
+    total_steps = sum(
+        len(floor["rooms"]) for floor in house_json["house"]["floors"]
+    ) + 2  # floorplan + exterior
 
+    progress = st.progress(0.0)
+    step = 0
+
+    # ---- ROOM IMAGES ----
     for floor in house_json["house"]["floors"]:
-        st.markdown(f"## Floor {floor['floor']}")
-
         for room in floor["rooms"]:
-            desc = (
-                f"{room['name']} | {room['design_style']} | "
-                f"Dimensions {room['dimensions_ft']} | "
-                f"Furniture: {', '.join(room['furniture'])}"
+            prompt = (
+                f"{room['name']} interior, {room['design_style']}, "
+                f"furnished, {room['dimensions_ft']}"
             )
 
-            with st.spinner(f"Generating image for {room['name']}..."):
-                img_url = call_image_model(desc, decrypted_key)
+            img = call_image_model(prompt, decrypted_key)
 
-            st.image(img_url, caption=desc, use_container_width=True)
+            st.session_state.images.append({
+                "title": f"{room['name']} (Floor {floor['floor']})",
+                "url": img
+            })
 
-    # Floor plan + exterior
-    st.markdown("## 🧾 2D Floor Plan (White Paper)")
-    floorplan_img = call_image_model(
-        "2D architectural floor plan white background with dimensions and notations",
+            step += 1
+            progress.progress(step / total_steps)
+
+    # ---- 2D FLOOR PLAN ----
+    floorplan = call_image_model(
+        "2D architectural floor plan, white background, dimensions, notations",
         decrypted_key
     )
-    st.image(floorplan_img, use_container_width=True)
 
-    st.markdown("## 🏡 Exterior View")
-    exterior_img = call_image_model(
+    st.session_state.images.append({
+        "title": "2D Floor Plan",
+        "url": floorplan
+    })
+
+    step += 1
+    progress.progress(step / total_steps)
+
+    # ---- EXTERIOR ----
+    exterior = call_image_model(
         "Modern house exterior realistic render",
         decrypted_key
     )
-    st.image(exterior_img, use_container_width=True)
 
-    st.success("Pipeline complete. Clean. Sequential. Controlled. 😎")
+    st.session_state.images.append({
+        "title": "Exterior View",
+        "url": exterior
+    })
+
+    progress.progress(1.0)
+    st.session_state.generated = True
+
+# ===============================
+# RENDER RESULTS
+# ===============================
+if st.session_state.generated:
+
+    st.subheader("📐 Structured 2D Design (JSON)")
+    st.json(st.session_state.house_json)
+
+    st.subheader("🖼️ Auto-Generated Images")
+
+    for img in st.session_state.images:
+        st.image(
+            img["url"],
+            caption=img["title"],
+            use_container_width=True
+        )
+
+    if st.button("Reset 🔄"):
+        st.session_state.generated = False
+        st.session_state.images = []
+        st.session_state.house_json = None
