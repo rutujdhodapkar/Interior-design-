@@ -1,157 +1,192 @@
-import streamlit as st
-import time
+import os
 import json
-import torch
-from diffusers import StableDiffusionPipeline
-from PIL import Image
+from datetime import datetime
+from urllib.parse import quote
+from flask import Flask, send_from_directory, abort, request, redirect, make_response, jsonify
 
-# ===============================
-# Streamlit Config
-# ===============================
-st.set_page_config(
-    page_title="AI House Design Generator",
-    layout="wide"
-)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ===============================
-# Load Stable Diffusion (ONCE)
-# ===============================
-@st.cache_resource
-def load_sd():
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "runwayml/stable-diffusion-v1-5",
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-    )
-    pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
-    return pipe
+app = Flask(__name__, static_folder=None)
 
-pipe = load_sd()
+FILES = {
+    '': 'home.html',
+    'home': 'home.html',
+    'login': 'login.html',
+    'signup': 'signup.html',
+    'chat': 'chat.html',
+    'loading': 'loading.html',
+    'error': 'error.html',
+    'logorsign': 'logorsign.html'
+}
 
-# ===============================
-# Session State
-# ===============================
-if "generated" not in st.session_state:
-    st.session_state.generated = False
+def _send_file(filename):
+    path = os.path.join(BASE_DIR, filename)
+    if os.path.isfile(path):
+        return send_from_directory(BASE_DIR, filename)
+    abort(404)
 
-if "house_json" not in st.session_state:
-    st.session_state.house_json = None
+for route, filename in FILES.items():
+    endpoint = '/' if route == '' else f'/{route}'
 
-# ===============================
-# Caesar Decrypt
-# ===============================
-def caesar_decrypt(text, key=3):
-    result = ""
-    for c in text:
-        if c.isalpha():
-            base = 65 if c.isupper() else 97
-            result += chr((ord(c) - base - key) % 26 + base)
+    def make_view(fn, route_name):
+        def view():
+            return _send_file(fn)
+        view.__name__ = f'view_{route_name or "root"}_{fn.replace(".", "_")}'
+        return view
+
+    endpoint_name = f'endpoint_{route or "root"}'
+    app.add_url_rule(endpoint, endpoint_name, view_func=make_view(filename, route))
+    filename_path = f'/{filename}'
+    endpoint_name_file = f'{endpoint_name}_file'
+    app.add_url_rule(filename_path, endpoint_name_file, view_func=make_view(filename, route))
+
+@app.route('/files/<path:filename>')
+def files(filename):
+    path = os.path.join(BASE_DIR, filename)
+    if os.path.isfile(path):
+        return send_from_directory(BASE_DIR, filename)
+    abort(404)
+
+
+@app.route('/signup', methods=['POST'])
+def handle_signup():
+    form = request.form
+    username = (form.get('username') or '').strip()
+    email = (form.get('email') or '').strip()
+    first = (form.get('first') or '').strip()
+    last = (form.get('last') or '').strip()
+    password = (form.get('password') or '').strip()
+    age = (form.get('age') or '').strip()
+    role = (form.get('role') or '').strip()
+
+    if not username or not email or not first or not password:
+        msg = "Missing required fields"
+        return redirect(f'/signup.html?error={quote(msg)}')
+    if "@" not in email or "." not in email:
+        msg = "Invalid email address"
+        return redirect(f'/signup.html?error={quote(msg)}')
+
+    users_path = os.path.join(BASE_DIR, 'users.json')
+    try:
+        if os.path.exists(users_path):
+            with open(users_path, 'r', encoding='utf-8') as fh:
+                try:
+                    users = json.load(fh)
+                except Exception:
+                    users = []
         else:
-            result += c
-    return result
+            users = []
 
-# ===============================
-# MOCK OSS MODEL (JSON OUTPUT)
-# ===============================
-def call_oss_model(prompt, api_key):
-    return {
-        "house": {
-            "floors": [
-                {
-                    "floor": 1,
-                    "rooms": [
-                        {
-                            "name": "Living Room",
-                            "dimensions": "18x15 ft",
-                            "style": "modern minimal",
-                            "furniture": ["sofa", "coffee table", "tv unit"]
-                        },
-                        {
-                            "name": "Kitchen",
-                            "dimensions": "12x10 ft",
-                            "style": "contemporary",
-                            "furniture": ["modular cabinets", "kitchen island"]
-                        }
-                    ]
-                }
-            ]
+        for u in users:
+            if u.get('username') == username:
+                return redirect(f'/signup.html?error={quote("Username already exists")}')
+            if u.get('email') == email:
+                return redirect(f'/signup.html?error={quote("Email already registered")}')
+
+        user_obj = {
+            "username": username,
+            "email": email,
+            "first": first,
+            "last": last,
+            "password": password,
+            "age": age,
+            "role": role,
+            "created_at": datetime.utcnow().isoformat() + "Z"
         }
-    }
 
-# ===============================
-# JSON → IMAGE PROMPT
-# ===============================
-def generate_room_image(room_json):
-    prompt = (
-        f"photorealistic {room_json['style']} {room_json['name']} interior, "
-        f"fully furnished with {', '.join(room_json['furniture'])}, "
-        f"luxury lighting, ultra realistic, interior design, high quality"
-    )
+        users.append(user_obj)
+        with open(users_path, 'w', encoding='utf-8') as fh:
+            json.dump(users, fh, indent=2, ensure_ascii=False)
 
-    image = pipe(
-        prompt,
-        num_inference_steps=30,
-        guidance_scale=7.5
-    ).images[0]
+        return redirect('/login.html')
+    except Exception as e:
+        return redirect(f'/signup.html?error={quote("Server error: " + str(e))}')
 
-    return image
 
-# ===============================
-# UI
-# ===============================
-st.title("🏠 AI Furnished Room Generator (REAL IMAGES)")
-st.caption("Stable Diffusion powered · JSON → Interior Images")
+@app.route('/login', methods=['POST'])
+def handle_login():
+    form = request.form
+    email = (form.get('email') or '').strip()
+    password = (form.get('password') or '').strip()
 
-encrypted_key = st.text_input(
-    "Encrypted API Key",
-    type="password"
-)
+    if not email or not password:
+        return redirect(f'/login.html?error={quote("Missing email or password")}')
 
-user_prompt = st.text_area(
-    "Describe your house",
-    placeholder="Modern 2 floor house with open kitchen"
-)
+    users_path = os.path.join(BASE_DIR, 'users.json')
+    try:
+        if os.path.exists(users_path):
+            with open(users_path, 'r', encoding='utf-8') as fh:
+                try:
+                    users = json.load(fh)
+                except Exception:
+                    users = []
+        else:
+            users = []
 
-# ===============================
-# PIPELINE
-# ===============================
-if st.button("Generate 🚀") and not st.session_state.generated:
+        user = None
+        for u in users:
+            if u.get('email') == email:
+                user = u
+                break
 
-    api_key = caesar_decrypt(encrypted_key)
+        if not user or user.get('password') != password:
+            return redirect(f'/login.html?error={quote("Invalid email or password")}')
 
-    with st.spinner("Reasoning (OSS model)..."):
-        house_json = call_oss_model(user_prompt, api_key)
+        resp = make_response(redirect('/chat.html'))
+        resp.set_cookie('user_id', user.get('username') or '', httponly=True)
+        resp.set_cookie('device_id', datetime.utcnow().isoformat() + "Z", httponly=True)
+        return resp
+    except Exception as e:
+        return redirect(f'/login.html?error={quote("Server error: " + str(e))}')
 
-    st.session_state.house_json = house_json
-    st.session_state.generated = True
 
-# ===============================
-# RENDER + IMAGE GEN
-# ===============================
-if st.session_state.generated:
+@app.route('/get_user_info')
+def get_user_info():
+    username = request.cookies.get('user_id') or ''
+    if not username:
+        return jsonify({}), 200
 
-    st.subheader("📐 Design JSON")
-    st.json(st.session_state.house_json)
+    users_path = os.path.join(BASE_DIR, 'users.json')
+    try:
+        if os.path.exists(users_path):
+            with open(users_path, 'r', encoding='utf-8') as fh:
+                try:
+                    users = json.load(fh)
+                except Exception:
+                    users = []
+        else:
+            users = []
 
-    st.subheader("🖼️ Furnished Room Images")
+        user = None
+        for u in users:
+            if u.get('username') == username:
+                user = u
+                break
 
-    progress = st.progress(0.0)
-    rooms = st.session_state.house_json["house"]["floors"][0]["rooms"]
+        if not user:
+            return jsonify({}), 200
 
-    for i, room in enumerate(rooms):
-        with st.spinner(f"Generating {room['name']}..."):
-            img = generate_room_image(room)
+        safe_user = {
+            'username': user.get('username', ''),
+            'email': user.get('email', ''),
+            'first': user.get('first', ''),
+            'last': user.get('last', ''),
+            'age': user.get('age', ''),
+            'role': user.get('role', '')
+        }
+        return jsonify(safe_user)
+    except Exception:
+        return jsonify({}), 200
 
-        st.image(
-            img,
-            caption=f"{room['name']} ({room['style']})",
-            use_container_width=True
-        )
 
-        st.code(json.dumps(room, indent=2), language="json")
-        progress.progress((i + 1) / len(rooms))
+@app.route('/logout')
+def logout():
+    resp = make_response(jsonify({'ok': True}))
+    resp.set_cookie('user_id', '', expires=0)
+    resp.set_cookie('device_id', '', expires=0)
+    return resp
 
-    st.success("✅ Real furnished images generated")
 
-    if st.button("Reset 🔄"):
-        st.session_state.generated = False
-        st.session_state.house_json = None
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+
