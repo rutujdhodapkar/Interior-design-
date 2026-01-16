@@ -40,6 +40,14 @@ def enforce_https():
     if request.headers.get("X-Forwarded-Proto") == "http":
         return redirect(request.url.replace("http://", "https://"), code=301)
 
+@app.after_request
+def add_security_headers(response):
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:;"
+    return response
+
 FILES = {
     '': 'home.html',
     'home': 'home.html',
