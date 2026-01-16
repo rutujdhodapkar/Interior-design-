@@ -8,6 +8,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 app = Flask(__name__, static_folder=None)
 
+@app.before_request
+def enforce_https():
+    if request.headers.get("X-Forwarded-Proto") == "http":
+        return redirect(request.url.replace("http://", "https://"), code=301)
+
 FILES = {
     '': 'home.html',
     'home': 'home.html',
@@ -133,8 +138,8 @@ def handle_login():
             return redirect(f'/login.html?error={quote("Invalid email or password")}')
 
         resp = make_response(redirect('/chat.html'))
-        resp.set_cookie('user_id', user.get('username') or '', httponly=True)
-        resp.set_cookie('device_id', datetime.utcnow().isoformat() + "Z", httponly=True)
+        resp.set_cookie('user_id', user.get('username') or '', httponly=True, secure=True, samesite='Lax')
+        resp.set_cookie('device_id', datetime.utcnow().isoformat() + "Z", httponly=True, secure=True, samesite='Lax')
         return resp
     except Exception as e:
         return redirect(f'/login.html?error={quote("Server error: " + str(e))}')
@@ -182,8 +187,8 @@ def get_user_info():
 @app.route('/logout')
 def logout():
     resp = make_response(jsonify({'ok': True}))
-    resp.set_cookie('user_id', '', expires=0)
-    resp.set_cookie('device_id', '', expires=0)
+    resp.set_cookie('user_id', '', expires=0, secure=True, httponly=True, samesite='Lax')
+    resp.set_cookie('device_id', '', expires=0, secure=True, httponly=True, samesite='Lax')
     return resp
 
 
