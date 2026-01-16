@@ -3,10 +3,37 @@ import json
 from datetime import datetime
 from urllib.parse import quote
 from flask import Flask, send_from_directory, abort, request, redirect, make_response, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
+from cryptography.fernet import Fernet
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 app = Flask(__name__, static_folder=None)
+
+# --- Encryption Setup ---
+KEY_FILE = os.path.join(BASE_DIR, 'secret.key')
+
+def load_key():
+    if not os.path.exists(KEY_FILE):
+        key = Fernet.generate_key()
+        with open(KEY_FILE, 'wb') as key_file:
+            key_file.write(key)
+    with open(KEY_FILE, 'rb') as key_file:
+        return key_file.read()
+
+cipher = Fernet(load_key())
+
+def encrypt_val(value):
+    if not value: return ""
+    return cipher.encrypt(value.encode()).decode()
+
+def decrypt_val(value):
+    if not value: return ""
+    try:
+        return cipher.decrypt(value.encode()).decode()
+    except:
+        return value  # Return original if decryption fails (fallback)
+# ------------------------
 
 @app.before_request
 def enforce_https():
@@ -85,17 +112,19 @@ def handle_signup():
         for u in users:
             if u.get('username') == username:
                 return redirect(f'/signup.html?error={quote("Username already exists")}')
-            if u.get('email') == email:
+            # Decrypt email to check for duplicates
+            stored_email = decrypt_val(u.get('email'))
+            if stored_email == email:
                 return redirect(f'/signup.html?error={quote("Email already registered")}')
 
         user_obj = {
             "username": username,
-            "email": email,
-            "first": first,
-            "last": last,
-            "password": password,
-            "age": age,
-            "role": role,
+            "email": encrypt_val(email),
+            "first": encrypt_val(first),
+            "last": encrypt_val(last),
+            "password": generate_password_hash(password),
+            "age": encrypt_val(age),
+            "role": encrypt_val(role),
             "created_at": datetime.utcnow().isoformat() + "Z"
         }
 
@@ -130,15 +159,28 @@ def handle_login():
 
         user = None
         for u in users:
-            if u.get('email') == email:
-                user = u
-                break
+            if u.get('email') == email: 
+                # This check is tricky if email is encrypted. 
+                # We usually lookup by username, but form sends email.
+                # Strategy: iterate and decrypt email to find user.
+                pass 
 
-        if not user or user.get('password') != password:
+        # Optimization: Since we login by Email, we have to scan.
+        target_user = None
+        for u in users:
+            if decrypt_val(u.get('email')) == email:
+                target_user = u
+                break
+        
+        if not target_user:
+             return redirect(f'/login.html?error={quote("Invalid email or password")}')
+
+        # Verify password (hash)
+        if not check_password_hash(target_user.get('password'), password):
             return redirect(f'/login.html?error={quote("Invalid email or password")}')
 
         resp = make_response(redirect('/chat.html'))
-        resp.set_cookie('user_id', user.get('username') or '', httponly=True, secure=True, samesite='Lax')
+        resp.set_cookie('user_id', target_user.get('username') or '', httponly=True, secure=True, samesite='Lax')
         resp.set_cookie('device_id', datetime.utcnow().isoformat() + "Z", httponly=True, secure=True, samesite='Lax')
         return resp
     except Exception as e:
@@ -173,11 +215,11 @@ def get_user_info():
 
         safe_user = {
             'username': user.get('username', ''),
-            'email': user.get('email', ''),
-            'first': user.get('first', ''),
-            'last': user.get('last', ''),
-            'age': user.get('age', ''),
-            'role': user.get('role', '')
+            'email': decrypt_val(user.get('email', '')),
+            'first': decrypt_val(user.get('first', '')),
+            'last': decrypt_val(user.get('last', '')),
+            'age': decrypt_val(user.get('age', '')),
+            'role': decrypt_val(user.get('role', ''))
         }
         return jsonify(safe_user)
     except Exception:
