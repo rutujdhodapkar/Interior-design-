@@ -181,38 +181,7 @@
     <h1>Log in</h1>
     <p>Welcome back</p>
 
-    <button class="google-btn" style="margin-top: 12px;"
-      onclick="showNotif('Google login is not Supported Yet','error')">
-      <span class="google-logo">
-        <img src="https://upload.wikimedia.org/wikipedia/commons/3/3c/Google_Favicon_2025.svg" alt="Google" width="22"
-          height="22" style="display:inline-block;">
-      </span>
-      Continue with Google
-    </button>
-    <button class="microsoft-btn" onclick="showNotif('Microsoft login is not Supported Yet','error')">
-      <span class="microsoft-logo">
-        <svg viewBox="0 0 16 16" xmlns="https://www.w3.org/2000/svg" fill="none" width="22" height="22"
-          style="display:inline-block;">
-          <g id="SVGRepo_bgCarrier" stroke-width="0"></g>
-          <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g>
-          <g id="SVGRepo_iconCarrier">
-            <path fill="#F35325" d="M1 1h6.5v6.5H1V1z"></path>
-            <path fill="#81BC06" d="M8.5 1H15v6.5H8.5V1z"></path>
-            <path fill="#05A6F0" d="M1 8.5h6.5V15H1V8.5z"></path>
-            <path fill="#FFBA08" d="M8.5 8.5H15V15H8.5V8.5z"></path>
-          </g>
-        </svg>
-      </span>
-      Continue with Microsoft
-    </button>
-    <button class="apple-btn" onclick="showNotif('Apple login is not Supported Yet','error')">
-      <span class="apple-logo">
-        <img src="https://www.svgrepo.com/show/511330/apple-173.svg" alt="Apple" width="22" height="22"
-          style="display:inline-block;">
-      </span>
-      Continue with Apple
-    </button>
-    <div class="divider">or</div>
+
     <div id="login-fields">
       <form id="loginForm" action="/login" method="post" style="display:flex;flex-direction:column;">
         <input id="email" name="email" placeholder="Email address" autocomplete="username">
@@ -318,7 +287,7 @@
 
     document.addEventListener('DOMContentLoaded', async () => {
       const didAuto = await tryAutoLogin();
-      if (didAuto) return; 
+      if (didAuto) return;
 
       const emailInput = document.getElementById('email');
       const passwordInput = document.getElementById('password');
@@ -348,19 +317,7 @@
   </script>
   </script>
 
-<script>
-(function(){
-  function _block(e){e.preventDefault();e.stopPropagation();}
-  document.addEventListener('contextmenu', _block, true);
-  document.addEventListener('keydown', function(e){
-    if (e.key === 'F12' || e.keyCode === 123 ||
-        (e.ctrlKey && e.shiftKey && /[IJC]/i.test(e.key)) ||
-        (e.ctrlKey && e.key && e.key.toUpperCase() === 'U')) {
-      _block(e);
-    }
-  }, true);
-})();
-</script>
+
 
 </body>
 
