@@ -6,7 +6,7 @@ import socket
 
 # ================= CONFIG =================
 
-API_KEY = st.secrets.get("API_KEY", "")
+API_KEY = st.secrets.get("API_KEY", "ddc-a4f-5d489223ebb84c0387b2c7e3cb01a751")
 BASE_URL = st.secrets.get("BASE_URL", "https://api.a4f.ai/v1/chat/completions")
 
 REASONING_MODEL = "provider-3/gpt-5.1-chat"
@@ -65,3 +65,4 @@ if run:
         st.write(res.json())
     except Exception as e:
         st.error(f"Request failed: {e}")
+
