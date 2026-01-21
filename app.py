@@ -1,247 +1,161 @@
-import os
+import streamlit as st
+import requests
 import json
-from datetime import datetime
-from urllib.parse import quote
-from flask import Flask, send_from_directory, abort, request, redirect, make_response, jsonify
-from werkzeug.security import generate_password_hash, check_password_hash
-from cryptography.fernet import Fernet
+import base64
+import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# ================= CONFIG =================
 
-app = Flask(__name__, static_folder=None)
+API_KEY = "ddc-a4f-5d489223ebb84c0387b2c7e3cb01a751"
+BASE_URL = "https://api.a4f.ai/v1/chat/completions"
 
-# --- Encryption Setup ---
-KEY_FILE = os.path.join(BASE_DIR, 'secret.key')
+REASONING_MODEL = "provider-3/gpt-5.1-chat"
+IMAGE_MODEL = "provider-3/gemini-2.5-flash-image-preview-edit"
 
-def load_key():
-    if not os.path.exists(KEY_FILE):
-        key = Fernet.generate_key()
-        with open(KEY_FILE, 'wb') as key_file:
-            key_file.write(key)
-    with open(KEY_FILE, 'rb') as key_file:
-        return key_file.read()
-
-cipher = Fernet(load_key())
-
-def encrypt_val(value):
-    if not value: return ""
-    return cipher.encrypt(value.encode()).decode()
-
-def decrypt_val(value):
-    if not value: return ""
-    try:
-        return cipher.decrypt(value.encode()).decode()
-    except:
-        return value  # Return original if decryption fails (fallback)
-# ------------------------
-
-@app.before_request
-def enforce_https():
-    if request.headers.get("X-Forwarded-Proto") == "http":
-        return redirect(request.url.replace("http://", "https://"), code=301)
-
-@app.after_request
-def add_security_headers(response):
-    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
-    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:;"
-    return response
-
-FILES = {
-    '': 'home.html',
-    'home': 'home.html',
-    'login': 'login.html',
-    'signup': 'signup.html',
-    'chat': 'chat.html',
-    'loading': 'loading.html',
-    'error': 'error.html',
-    'logorsign': 'logorsign.html'
+HEADERS = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
 }
 
-def _send_file(filename):
-    path = os.path.join(BASE_DIR, filename)
-    if os.path.isfile(path):
-        return send_from_directory(BASE_DIR, filename)
-    abort(404)
+# ================= UI =================
 
-for route, filename in FILES.items():
-    endpoint = '/' if route == '' else f'/{route}'
+st.set_page_config(page_title="Interior AI", layout="wide")
+st.title("🏠 Interior Design AI System")
 
-    def make_view(fn, route_name):
-        def view():
-            return _send_file(fn)
-        view.__name__ = f'view_{route_name or "root"}_{fn.replace(".", "_")}'
-        return view
+st.caption("Reasoning → JSON → Interior Images (Strict Interior Tasks Only)")
 
-    endpoint_name = f'endpoint_{route or "root"}'
-    app.add_url_rule(endpoint, endpoint_name, view_func=make_view(filename, route))
-    filename_path = f'/{filename}'
-    endpoint_name_file = f'{endpoint_name}_file'
-    app.add_url_rule(filename_path, endpoint_name_file, view_func=make_view(filename, route))
+user_prompt = st.text_area("Enter your interior design prompt")
 
-@app.route('/files/<path:filename>')
-def files(filename):
-    path = os.path.join(BASE_DIR, filename)
-    if os.path.isfile(path):
-        return send_from_directory(BASE_DIR, filename)
-    abort(404)
+uploaded_image = st.file_uploader(
+    "Optional: Upload room/house image",
+    type=["png", "jpg", "jpeg"]
+)
 
+generate_btn = st.button("Generate")
 
-@app.route('/signup', methods=['POST'])
-def handle_signup():
-    form = request.form
-    username = (form.get('username') or '').strip()
-    email = (form.get('email') or '').strip()
-    first = (form.get('first') or '').strip()
-    last = (form.get('last') or '').strip()
-    password = (form.get('password') or '').strip()
-    age = (form.get('age') or '').strip()
-    role = (form.get('role') or '').strip()
+# ================= HELPERS =================
 
-    if not username or not email or not first or not password:
-        msg = "Missing required fields"
-        return redirect(f'/signup.html?error={quote(msg)}')
-    if "@" not in email or "." not in email:
-        msg = "Invalid email address"
-        return redirect(f'/signup.html?error={quote(msg)}')
-
-    users_path = os.path.join(BASE_DIR, 'users.json')
+def safe_post(payload):
     try:
-        if os.path.exists(users_path):
-            with open(users_path, 'r', encoding='utf-8') as fh:
-                try:
-                    users = json.load(fh)
-                except Exception:
-                    users = []
-        else:
-            users = []
+        return requests.post(
+            BASE_URL,
+            headers=HEADERS,
+            json=payload,
+            timeout=40
+        )
+    except requests.exceptions.RequestException as e:
+        st.error("❌ Network / DNS error. Deployment environment required.")
+        st.stop()
 
-        for u in users:
-            if u.get('username') == username:
-                return redirect(f'/signup.html?error={quote("Username already exists")}')
-            # Decrypt email to check for duplicates
-            stored_email = decrypt_val(u.get('email'))
-            if stored_email == email:
-                return redirect(f'/signup.html?error={quote("Email already registered")}')
+# ================= REASONING =================
 
-        user_obj = {
-            "username": username,
-            "email": encrypt_val(email),
-            "first": encrypt_val(first),
-            "last": encrypt_val(last),
-            "password": generate_password_hash(password),
-            "age": encrypt_val(age),
-            "role": encrypt_val(role),
-            "created_at": datetime.utcnow().isoformat() + "Z"
-        }
+SYSTEM_PROMPT = """
+You are an interior-design reasoning engine.
 
-        users.append(user_obj)
-        with open(users_path, 'w', encoding='utf-8') as fh:
-            json.dump(users, fh, indent=2, ensure_ascii=False)
+RULES:
+- ONLY handle interior design tasks.
+- If task is NOT interior related, respond EXACTLY:
+  {"error":"INVALID_TASK"}
 
-        return redirect('/login.html')
-    except Exception as e:
-        return redirect(f'/signup.html?error={quote("Server error: " + str(e))}')
+- Output ONLY valid JSON.
+- Include:
+  house -> floors -> rooms
+  room dimensions
+  room type
+  furniture placement
 
+- If user asks for a specific room, generate ONLY that room.
+"""
 
-@app.route('/login', methods=['POST'])
-def handle_login():
-    form = request.form
-    email = (form.get('email') or '').strip()
-    password = (form.get('password') or '').strip()
+def run_reasoning(prompt):
+    payload = {
+        "model": REASONING_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.2
+    }
 
-    if not email or not password:
-        return redirect(f'/login.html?error={quote("Missing email or password")}')
+    res = safe_post(payload)
 
-    users_path = os.path.join(BASE_DIR, 'users.json')
-    try:
-        if os.path.exists(users_path):
-            with open(users_path, 'r', encoding='utf-8') as fh:
-                try:
-                    users = json.load(fh)
-                except Exception:
-                    users = []
-        else:
-            users = []
+    if res.status_code != 200:
+        st.error(res.text)
+        st.stop()
 
-        user = None
-        for u in users:
-            if u.get('email') == email: 
-                # This check is tricky if email is encrypted. 
-                # We usually lookup by username, but form sends email.
-                # Strategy: iterate and decrypt email to find user.
-                pass 
+    content = res.json()["choices"][0]["message"]["content"]
 
-        # Optimization: Since we login by Email, we have to scan.
-        target_user = None
-        for u in users:
-            if decrypt_val(u.get('email')) == email:
-                target_user = u
-                break
-        
-        if not target_user:
-             return redirect(f'/login.html?error={quote("Invalid email or password")}')
+    if "INVALID_TASK" in content:
+        return None
 
-        # Verify password (hash)
-        if not check_password_hash(target_user.get('password'), password):
-            return redirect(f'/login.html?error={quote("Invalid email or password")}')
+    return json.loads(content)
 
-        resp = make_response(redirect('/chat.html'))
-        resp.set_cookie('user_id', target_user.get('username') or '', httponly=True, secure=True, samesite='Lax')
-        resp.set_cookie('device_id', datetime.utcnow().isoformat() + "Z", httponly=True, secure=True, samesite='Lax')
-        return resp
-    except Exception as e:
-        return redirect(f'/login.html?error={quote("Server error: " + str(e))}')
+# ================= IMAGE GEN =================
 
+def generate_image(prompt, image_bytes=None):
+    messages = []
 
-@app.route('/get_user_info')
-def get_user_info():
-    username = request.cookies.get('user_id') or ''
-    if not username:
-        return jsonify({}), 200
+    if image_bytes:
+        img_b64 = base64.b64encode(image_bytes).decode()
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": prompt},
+                {"type": "input_image", "image_base64": img_b64}
+            ]
+        })
+    else:
+        messages.append({"role": "user", "content": prompt})
 
-    users_path = os.path.join(BASE_DIR, 'users.json')
-    try:
-        if os.path.exists(users_path):
-            with open(users_path, 'r', encoding='utf-8') as fh:
-                try:
-                    users = json.load(fh)
-                except Exception:
-                    users = []
-        else:
-            users = []
+    payload = {
+        "model": IMAGE_MODEL,
+        "messages": messages
+    }
 
-        user = None
-        for u in users:
-            if u.get('username') == username:
-                user = u
-                break
+    res = safe_post(payload)
 
-        if not user:
-            return jsonify({}), 200
+    if res.status_code != 200:
+        st.error(res.text)
+        st.stop()
 
-        safe_user = {
-            'username': user.get('username', ''),
-            'email': decrypt_val(user.get('email', '')),
-            'first': decrypt_val(user.get('first', '')),
-            'last': decrypt_val(user.get('last', '')),
-            'age': decrypt_val(user.get('age', '')),
-            'role': decrypt_val(user.get('role', ''))
-        }
-        return jsonify(safe_user)
-    except Exception:
-        return jsonify({}), 200
+    return base64.b64decode(
+        res.json()["choices"][0]["message"]["content"][0]["image_base64"]
+    )
 
+# ================= MAIN FLOW =================
 
-@app.route('/logout')
-def logout():
-    resp = make_response(jsonify({'ok': True}))
-    resp.set_cookie('user_id', '', expires=0, secure=True, httponly=True, samesite='Lax')
-    resp.set_cookie('device_id', '', expires=0, secure=True, httponly=True, samesite='Lax')
-    return resp
+if generate_btn:
+    if not user_prompt.strip():
+        st.warning("Enter a prompt")
+        st.stop()
 
+    # CASE 1: IMAGE UPLOADED → DIRECT IMAGE MODEL
+    if uploaded_image:
+        st.info("Image detected → skipping reasoning model")
+        image_bytes = uploaded_image.read()
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+        img = generate_image(user_prompt, image_bytes)
+        st.image(img, caption="Generated Interior")
 
+    # CASE 2: TEXT → REASONING → IMAGES
+    else:
+        layout = run_reasoning(user_prompt)
+
+        if layout is None:
+            st.error("❌ Not an interior design task")
+            st.stop()
+
+        st.subheader("📄 Generated Layout JSON")
+        st.json(layout)
+
+        for floor in layout["house"]["floors"]:
+            for room in floor["rooms"]:
+                prompt = f"""
+                Ultra-realistic interior design of a {room['room_type']}
+                Room name: {room['room_name']}
+                Dimensions: {room['dimensions']}
+                Furniture layout: {room['furniture']}
+                Modern lighting, realistic materials, 4K render
+                """
+                img = generate_image(prompt)
+                st.image(img, caption=room["room_name"])
